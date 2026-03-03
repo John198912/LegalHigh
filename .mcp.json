@@ -2,23 +2,53 @@
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@anthropic/mcp-filesystem"],
+      "args": [
+        "-y",
+        "@anthropic/mcp-filesystem"
+      ],
       "description": "文件系统操作，支持 PDF/DOCX/JPG/PNG 读取和 OCR",
       "config": {
-        "formats": ["pdf", "docx", "jpg", "png"],
+        "formats": [
+          "pdf",
+          "docx",
+          "jpg",
+          "png"
+        ],
         "ocr": true,
         "ocr_engine": "surya"
       }
     },
-    "law-database": {
-      "command": "placeholder",
-      "args": [],
-      "description": "【占位】中国法律法规数据库检索，接入北大法宝/威科先行/国家法律法规数据库",
-      "config": {
-        "sources": ["北大法宝", "威科先行", "国家法律法规数据库"],
-        "search_types": ["keyword", "semantic", "article_number"],
-        "note": "待接入实际 MCP Server 实现"
-      }
+    "pkulaw-case-keyword": {
+      "type": "streamableHttp",
+      "url": "https://apim-gateway.pkulaw.com/mcp-case",
+      "headers": {
+        "Authorization": "Bearer daae0ceb-85e0-336c-bdf6-54a100d716ab"
+      },
+      "description": "北大法宝 — 司法案例关键词检索"
+    },
+    "pkulaw-case-semantic-search": {
+      "type": "streamableHttp",
+      "url": "https://apim-gateway.pkulaw.com/mcp-case-search-service",
+      "headers": {
+        "Authorization": "Bearer daae0ceb-85e0-336c-bdf6-54a100d716ab"
+      },
+      "description": "北大法宝 — 司法案例语义检索"
+    },
+    "pkulaw-law-keyword": {
+      "type": "streamableHttp",
+      "url": "https://apim-gateway.pkulaw.com/mcp-law",
+      "headers": {
+        "Authorization": "Bearer daae0ceb-85e0-336c-bdf6-54a100d716ab"
+      },
+      "description": "北大法宝 — 法律法规关键词检索"
+    },
+    "pkulaw-law-search-semantic": {
+      "type": "streamableHttp",
+      "baseUrl": "https://apim-gateway.pkulaw.com/mcp-law-search-service",
+      "headers": {
+        "Authorization": "Bearer daae0ceb-85e0-336c-bdf6-54a100d716ab"
+      },
+      "description": "北大法宝 — 法律法规语义检索（基于语义理解）"
     },
     "case-retrieval": {
       "command": "placeholder",
@@ -27,7 +57,12 @@
       "config": {
         "source": "中国裁判文书网",
         "search_type": "semantic+keyword",
-        "filters": ["案由", "法院层级", "裁判年份", "地区"],
+        "filters": [
+          "案由",
+          "法院层级",
+          "裁判年份",
+          "地区"
+        ],
         "note": "待接入实际 MCP Server 实现"
       }
     },
@@ -37,7 +72,11 @@
       "description": "【占位】中国执行信息公开网查询，支持失信被执行人和限消查询",
       "config": {
         "source": "中国执行信息公开网",
-        "watch_types": ["失信被执行人", "限制高消费", "终本案件"],
+        "watch_types": [
+          "失信被执行人",
+          "限制高消费",
+          "终本案件"
+        ],
         "note": "待接入实际 MCP Server 实现"
       }
     },
@@ -46,8 +85,15 @@
       "args": [],
       "description": "【占位】通知推送服务，支持企业微信和钉钉",
       "config": {
-        "channels": ["企业微信", "钉钉"],
-        "triggers": ["时效预警（到期前30天）", "审查请求", "案件状态变更"],
+        "channels": [
+          "企业微信",
+          "钉钉"
+        ],
+        "triggers": [
+          "时效预警（到期前30天）",
+          "审查请求",
+          "案件状态变更"
+        ],
         "note": "待接入实际 Webhook 实现"
       }
     }
