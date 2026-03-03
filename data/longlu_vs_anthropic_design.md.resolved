@@ -1,0 +1,1256 @@
+# 龙律师工作需求分析 × Anthropic Legal Plugin 架构对比 × 本地化优化方案
+
+---
+
+## 一、中国大陆律师核心工作需求提炼
+
+> 从龙律师系统提示词中提炼出的真实需求矩阵
+
+### 1.1 工作流维度
+
+龙律师系统提示词的核心不是"问答"，而是一套**4阶段结构化案件处理流程**：
+
+| 阶段 | 核心动作 | 关键输出 |
+|------|---------|---------|
+| **Phase 1** 信息接收 | 结构化整理原始案件事实、当事人、证据、诉求 | 《案件信息汇总表》+ 分类追问清单 |
+| **Phase 2** 信息补充 | 多轮追问直至信息充分；处理事实不明 | 情景假设分析框架 |
+| **Phase 3** 全面分析 | 法律关系定性、请求权基础、争议焦点、判例引用 | 《案件完整分析报告》（5部分14项） |
+| **Phase 4** 专业服务 | 文书起草、诉讼策略、证据指引、赔偿计算、执行方案 | 可直接使用的法律文书/策略文件 |
+
+**关键设计决策：** Phase 1 有意不做法律定性（防止早期误判），定性工作推迟到信息充分后的 Phase 3 进行。
+
+---
+
+### 1.2 核心业务需求分类
+
+```
+中国大陆律师核心工作
+│
+├── 【案件管理类】
+│   ├── 事实整理与时间线构建
+│   ├── 证据体系梳理（证据清单 + 证明力评估）
+│   ├── 争议焦点识别与拆解
+│   └── 多轮信息追问与事实不明处理
+│
+├── 【法律研究类】
+│   ├── 法律关系定性（请求权基础方法）
+│   ├── 现行法律条文精确引用（含废改时效校验）
+│   ├── 最高院司法解释与会议纪要适用
+│   ├── 指导性案例 / 公报案例检索
+│   └── 权威学者著作引用（张明楷/王利明/韩世远等）
+│
+├── 【文书起草类】
+│   ├── 诉讼文书（起诉状/答辩状/上诉状/代理词）
+│   ├── 法律意见书
+│   ├── 合同/协议（含和解协议）
+│   └── 执行类文书（执行异议申请等）
+│
+├── 【诉讼策略类】
+│   ├── 管辖选择（协议管辖/专属管辖/连接点）
+│   ├── 诉讼请求设计（总量最大化）
+│   ├── 举证责任分配分析
+│   ├── 庭审策略与质证方案
+│   └── 赔偿/标的金额计算（含利息/诉讼费）
+│
+├── 【执行专项类】
+│   ├── 追加被执行人（法定主义，严格限定范围）
+│   ├── 终本后恢复执行
+│   ├── 执行异议/复议/执行异议之诉
+│   └── 财产线索调查指引
+│
+├── 【合规监控类】
+│   ├── 法律时效性校验（防废止法律被误引）
+│   ├── 热点争议问题预警（公司法/合同法/劳动法等）
+│   └── 地域性实务差异提示
+│
+└── 【风险管理类】
+    ├── 确信度标注（🟢🟡🔴⚪ 四色体系）
+    ├── 情景假设分析（事实不明时）
+    └── 主动风险提示 + 免责声明
+```
+
+---
+
+### 1.3 中国法律体系特殊性（vs 英美法系）
+
+| 特征 | 具体表现 | 系统设计影响 |
+|------|---------|------------|
+| **成文法体系** | 法律条文逐条适用，不依赖 Common Law | 需要精确条文引用引擎 |
+| **司法解释权威** | 最高院司法解释具有准立法效力 | 必须同步更新跟踪司法解释 |
+| **会议纪要效力** | 《九民纪要》等实质约束审判 | 需要单独维护会议纪要知识库 |
+| **法律高频修订** | 近5年：民法典/公司法/行复法/民诉法等全面更新 | 时效性校验是核心硬需求 |
+| **地域实务差异** | 同一法律问题各地裁判尺度不同 | 需要区分"当地实务"维度 |
+| **人格/指导案例** | 最高院指导案例具有"应当参照"效力 | 独立的案例检索和引用模块 |
+
+---
+
+## 二、与 Anthropic Legal Plugin 的架构对比
+
+### 2.1 功能覆盖对比
+
+| 功能模块 | Anthropic Legal Plugin | 龙律师提示词 | 差距/扩展点 |
+|---------|----------------------|------------|-----------|
+| 合同审查 | ✅ `contract-review` Skill | ✅ Phase 3-4 | Anthropic 更结构化（RED/YELLOW/GREEN），龙律师更全面（含请求权基础） |
+| NDA 分诊 | ✅ `nda-triage` Skill | ⚠️ 未专项化 | **扩展点**：中国法下保密协议专项 Skill |
+| 合规监控 | ✅ `compliance` Skill | ✅ 时效校验机制 | 龙律师仅做被动防御，缺少主动监控 |
+| 风险评估 | ✅ `legal-risk-assessment` Skill | ✅ 确信度体系 | Anthropic 更量化，龙律师更定性 |
+| 会议简报 | ✅ `meeting-briefing` Skill | ❌ 无 | **扩展点**：庭前简报生成 |
+| 标准化回复 | ✅ `canned-responses` Skill | ❌ 无 | **扩展点**：常见问题模板库 |
+| 多阶段追问 | ❌ 无（单轮 Skill） | ✅ 4阶段工作流 | 龙律师远超 Anthropic 的核心优势 |
+| 事实不明处理 | ❌ 无 | ✅ 情景假设分析 | 龙律师独特创新，需要工程化 |
+| 请求权基础分析 | ❌ 无 | ✅ Phase 3 核心 | 大陆法系特有，需要专项 Agent |
+| 执行专项 | ❌ 无 | ✅ Phase 4 完整模块 | 中国执行实务的独特需求 |
+| 文书起草 | ⚠️ 隐性支持 | ✅ Phase 4 明确列举 | 需要大量中国法律文书模板 |
+| 多轮确认循环 | ❌ 无 | ✅ Phase 3 Step 3.2-3.3 | 人机协作核心机制 |
+
+### 2.2 架构设计理念对比
+
+| 维度 | Anthropic Legal Plugin | 龙律师提示词 |
+|------|----------------------|------------|
+| **Agent 粒度** | 细粒度：每个 Skill = 一个专业 Agent | 单体：一个 Agent 覆盖全流程 |
+| **状态管理** | 无状态（每次 Skill 调用独立） | 有状态（4阶段持续对话） |
+| **上下文策略** | 按需加载（Token 效率优先） | 全量持有（完整性优先） |
+| **定制化方式** | `legal.local.md` Playbook 文件 | 直接写入提示词 |
+| **外部集成** | MCP 协议（iManage/Clio/Box等） | 无（纯对话） |
+| **验证机制** | 无内建验证 Agent | 人工（律师审查） |
+| **法律体系** | 英美法系为主 | 中国大陆法系 |
+| **知识库** | 内置 LLM 通用知识 | 精确法条 + 司法解释引用 |
+
+### 2.3 核心架构差距总结
+
+```
+Anthropic 的强项（龙律师缺失）：
+✅ 模块化 Skill 复用
+✅ MCP 外部工具集成
+✅ Token 效率优化
+✅ Playbook 定制化机制
+✅ 可组合的 Commands 系统
+
+龙律师的强项（Anthropic 缺失）：
+✅ 完整的有状态多轮工作流
+✅ 事实不明情景假设框架
+✅ 中国法律体系精确适配
+✅ 请求权基础分析方法
+✅ 确信度标注体系
+✅ 反幻觉机制（法律时效校验）
+✅ 执行专项模块
+```
+
+---
+
+## 三、优化设计方案
+
+### 3.1 总体架构：有状态多 Agent 编排（v2）
+
+> ⚡ **v2 更新**：新增案件记忆层、并行执行编排、案件复杂度前置评估、模型分级调用
+
+```
+用户请求
+    │
+    ▼
+┌─────────────────────────────────────────────────┐
+│              案件记忆层（持久化）                   │
+│  案件DB(SQLite) │ 客户画像库 │ 对方档案 │ 类案经验库  │
+└──────────────────────────┬──────────────────────┘
+                           │ 注入历史上下文
+    ┌──────────────────────▼──────────────────────┐
+    │              Orchestrator Agent               │
+    │  ① 案件复杂度评估（低/中/高/极高 → 路由策略）  │
+    │  ② 阶段状态机（Phase 1→2→3→4）               │
+    │  ③ 简化/完整模式判断                          │
+    │  ④ 并行/串行子 Agent 调度                     │
+    │  ⑤ 输出 Schema 校验与汇聚                     │
+    │  ⑥ 律师审查门控触发                           │
+    └───┬─────────────────────────────┬─────────────┘
+        │                             │
+┌───────▼──────────┐         ┌────────▼────────────┐
+│   信息处理层（小模型）│         │    分析服务层（大模型）  │
+│  [gpt-4o-mini /  │         │  [Claude 3.5 /      │
+│   qwen2.5-7b]    │         │   Deepseek-R1-32B]  │
+│                  │         │                     │
+│ ┌──────────────┐ │         │ ┌─────────────────┐ │
+│ │ 信息提取 Agent│ │         │ │ 法律研究 Agent   │ │
+│ │(结构化事实/  │ │ 并行执行 → │ │(法条+司法解释+  │ │
+│ │ 证据/当事人) │ │    ───▶  │ │ 案例+学者观点)  │ │
+│ └──────────────┘ │         │ └─────────────────┘ │
+│ ┌──────────────┐ │         │ ┌─────────────────┐ │
+│ │ 信息缺口处理  │ │         │ │ 请求权基础 Agent │ │
+│ │ Agent        │ │    ───▶  │ │(构成要件逐一检验)│ │
+│ │(追问+情景假设 │ │         │ └─────────────────┘ │
+│ │ 合并处理)    │ │         │ ┌─────────────────┐ │
+│ └──────────────┘ │         │ │ 风险评估 Agent   │ │
+│ ┌──────────────┐ │    ───▶  │ │(确信度矩阵)      │ │
+│ │ 诉讼时效     │ │         │ └─────────────────┘ │
+│ │ 计算 Agent   │ │         │ ┌─────────────────┐ │
+│ │(期限预警)    │ │         │ │ 刑事风险/辩护   │ │
+│ └──────────────┘ │         │ │ Agent            │ │
+└──────────────────┘         │ └─────────────────┘ │
+                             └─────────────────────┘
+┌──────────────────┐         ┌─────────────────────┐
+│    文书服务层     │         │    验证/QA 管道       │
+│                  │         │   (非独立Agent，      │
+│ ┌──────────────┐ │         │    作为后处理装饰器)   │
+│ │诉讼文书 Agent│ │         │                     │
+│ └──────────────┘ │         │ @hallucination_check │
+│ ┌──────────────┐ │         │ - 废止法律黑名单      │
+│ │执行文书 Agent│ │         │ - 案号格式校验        │
+│ └──────────────┘ │         │ - 时效性标注          │
+│ ┌──────────────┐ │         └─────────────────────┘
+│ │合同起草 Agent│ │
+│ └──────────────┘ │         ┌─────────────────────┐
+│ ┌──────────────┐ │         │   律师审查节点(门控)   │
+│ │合同版本对比  │ │         │  AI稿 → diff追踪 →   │
+│ │ Agent        │ │         │  律师改稿 → 版本存档  │
+│ └──────────────┘ │         │  → 反哺训练数据库     │
+└──────────────────┘         └─────────────────────┘
+```
+
+**案件复杂度评估矩阵（路由前置）：**
+
+| 复杂度 | 判断标准 | 路由策略 | 模型选择 |
+|--------|---------|---------|--------|
+| 低 | 单一法律关系+证据充分 | 简化模式，信息层直接串行 | 小模型全程 |
+| 中 | 多法律关系/证据争议 | 完整模式，分析层串行 | 小+大模型分层 |
+| 高 | 跨领域/涉刑事/执行 | 完整模式，分析层并行 | 大模型+必须律师审查 |
+| 极高 | 涉外/上市公司/集体诉讼 | 完整模式+专项Agent | 大模型+人工全程介入 |
+
+---
+
+### 3.2 核心 Agent 设计
+
+#### Agent 1：Orchestrator（编排中枢）
+
+**职责：** 状态机管理 + 意图路由
+
+```yaml
+# orchestrator_config.yaml
+agent_name: orchestrator
+model: claude-3-5-sonnet / deepseek-r1  # 推理能力优先
+
+state_machine:
+  phases: [PHASE_1, PHASE_2, PHASE_3, PHASE_4]
+  modes: [SIMPLIFIED, FULL]
+  
+  transition_rules:
+    PHASE_1 → PHASE_2: "用户确认材料完整 AND 已提出追问"
+    PHASE_2 → PHASE_3: "信息充分度评估通过 OR 用户确认无更多信息"
+    PHASE_3 → PHASE_4: "用户确认分析报告无误"
+    
+  simplified_mode_trigger:
+    - 事实三要素完整（当事人/事实/诉求）
+    - 法律问题单一明确
+    - 用户有具体提问
+
+skills_loaded_per_phase:
+  PHASE_1: [信息提取, 追问生成]
+  PHASE_2: [追问生成, 情景假设]
+  PHASE_3: [法律研究, 请求权基础, 风险评估, 反幻觉校验]
+  PHASE_4: [诉讼文书, 执行文书, 合同起草, 风险评估]
+```
+
+---
+
+#### Agent 2：信息提取 Agent
+
+**对应龙律师 Phase 1 Step 1.2**
+
+```markdown
+---
+name: cn-case-information-extractor
+description: 中国法律体系下的案件信息结构化提取专家
+---
+
+# 角色
+你是案件信息提取专家，负责将用户描述的案件信息结构化为标准化的《案件信息汇总表》。
+
+# 提取框架
+必须按以下结构提取，缺失项标注[待补充]：
+
+## 一、基本信息
+- 案件类型：[民事/刑事/行政/商事/劳动/知产/执行]
+- 案件阶段：[纠纷初期/诉前/一审/二审/再审/执行]
+- 管辖线索：[地域/合同约定/专属管辖]
+
+## 二、当事人信息（结构化）
+- 我方：{主体类型, 名称, 法律地位}
+- 对方：{主体类型, 名称, 法律地位}
+- 关联方：[如有]
+
+## 三、事实时间线（客观记录，不做评价）
+[日期] → [事实] → [对应证据/待核实]
+
+## 四、证据清单
+{编号, 名称, 类型, 证明目的, 证明力初评}
+
+## 五、诉求标签
+[不做法律定性，仅记录用户表达的目标]
+
+# 严格禁止
+- 在 Phase 1 做法律关系定性
+- 对事实做主观评价
+- 引用任何法律条文（留待专业Agent处理）
+```
+
+---
+
+#### Agent 3：信息缺口处理 Agent（合并版）
+
+> ⚡ **v2 更新**：将原「追问生成」+「情景假设」合并为单一 Agent，减少一次 LLM 调用
+
+```markdown
+---
+name: cn-information-gap-handler
+description: 评估信息缺口 → 能追问就追问 → 不能追问就情景假设
+model: small  # 逻辑分类任务，用小模型节省成本
+---
+
+# 决策树
+对每个信息缺口执行：
+  IF 用户未回复 → 生成ABCD分类追问
+  IF 用户明确无法回答 → 触发情景假设分析
+
+# 追问优先级框架（ABCD）
+- A类（影响定性）：合意存在/时间节点/金额/主体资格
+- B类（影响证明）：书面证据/电子证据保全/证人
+- C类（影响策略）：双方关系/行业惯例/地域信息
+- D类（影响方向）：期望结果/底线/时间成本预期
+
+每个问题输出格式：
+「Q{n}.[分类] 问题内容？→ 影响：[影响什么决策]」
+
+# 情景假设分析（事实不明时）
+关于[事实X]，分以下情形：
+- 情形A：若[假设1]，则：法律关系=[X]，请求权=[Y]，胜算=[🟡/🔴]
+- 情形B：若[假设2]，则：...
+→ 建议优先核实：[概率最高情形]
+
+# 输出 Schema
+{
+  "mode": "question | scenario",
+  "items": [{"category": "A|B|C|D", "question": "...", "impact": "..."}],
+  "scenario_items": [{"fact": "...", "scenarios": [...]}]
+}
+```
+
+---
+
+#### Agent 4：诉讼时效管理 Agent【新增】
+
+> ⚡ **v2 新增**：实务中最高频的风险点，原方案完全缺失
+
+```markdown
+---
+name: cn-statute-of-limitations
+description: 自动计算案件所有关键法律期限，主动预警即将到期的时效节点
+model: small  # 计算+日期处理，无需大模型
+---
+
+# 诉讼时效规则库
+
+## 一般时效
+- 民事一般：3年（《民法典》第188条），从知道或应知之日起算
+- 知道权利被侵害之日起最长20年（第188条第2款）
+
+## 特殊时效（短于一般）
+- 国际货物买卖：4年（《民法典》第594条）
+- 人身损害赔偿：1年（部分地区实务）→ 标注⚪建议核实
+
+## 时效中断事由（重置计算）
+- 权利人主张权利（起诉/申请仲裁/申请支付令/申请宣告破产）
+- 义务人同意履行（书面/口头承诺）
+- 权利人提出要求（催款函+送达证明）
+
+## 程序性期限（不可错过）
+- 上诉期：民事15天/行政15天/刑事10天，自判决书送达之日
+- 二审审限：民事3个月/行政3个月
+- 执行申请：2年，从履行期届满之日
+- 再审申请：6个月，从判决生效之日
+
+# 输出格式
+┌────────────────────────────────────┐
+│ ⏰ 期限预警清单                      │
+├──────────────┬──────┬──────┬───────┤
+│ 期限类型      │ 起算日│ 到期日│ 剩余  │
+│ 诉讼时效      │ ...  │ ...  │ 🔴 X天│
+│ 上诉期        │ ...  │ ...  │ 🟡 X天│
+│ 执行申请期    │ ...  │ ...  │ 🟢 X天│
+└──────────────┴──────┴──────┴───────┘
+⚠️ 最紧急截止日：[最近一个到期节点]
+```
+
+---
+
+#### Agent 5：法律研究 Agent（最核心）
+
+**对应龙律师 Phase 3 的法律分析部分**
+
+```markdown
+---
+name: cn-legal-research
+description: 中国大陆法律体系下的精确法条检索、司法解释适用、案例分析专家
+version: 2.0
+---
+
+# 知识体系优先级（从高到低）
+
+1. 现行有效法律法规（以民法典为核心）
+2. 最高院司法解释（注明文号和施行日期）
+3. 最高院会议纪要（《九民纪要》《金融纪要》等）
+4. 指导性案例（"应当参照"效力）
+5. 最高院公报案例
+6. 权威学者著作（张明楷/王利明/韩世远等，注明版次）
+7. 各地高院审判指引
+
+# 时效性校验协议（必须执行）
+
+每次引用前执行：
+Step 1: 该法是否现行有效？（废止标志：民法典/新公司法等废止了多部法律）
+Step 2: 是最新修订版？（公司法2024.7.1/行复法2024.1.1/民诉法2024.1.1施行）
+Step 3: 相关司法解释是否仍有效？
+Step 4: 不确定→标注 ⚪ 并提示用户核实
+
+# 绝对废止法律黑名单（不得引用）
+- 《合同法》（2021年民法典施行后废止）
+- 《物权法》《婚姻法》《继承法》《侵权责任法》《担保法》（同上）
+- 《民法通则》《民法总则》（同上）
+- 2024.7.1前的《公司法》条文
+- 2024.1.1前的《行政复议法》《民事诉讼法》条文
+
+# 请求权基础分析方法
+对每个争议焦点：
+① 谁向谁主张什么权利？
+② 法律依据=基础规范（法条）
+③ 构成要件逐一检验
+④ 结论+确信度标注（🟢🟡🔴⚪）
+
+# 输出引用格式
+法条：《X法》第X条第X款：[原文]
+司法解释：法释[年]X号第X条
+案例：（年份）最高法民终XXXX号 — [裁判要旨]
+著作：作者：《书名》（第X版，年份），第XX页
+```
+
+---
+
+#### Agent 6：反幻觉校验 Agent
+
+**龙律师提示词中的隐性机制，需要工程化实现**
+
+```markdown
+---
+name: cn-legal-hallucination-checker
+description: 对法律输出进行事实性校验，标记可疑引用
+---
+
+# 校验清单（每次输出前自动执行）
+
+□ 引用法律是否属于废止黑名单？
+□ 案号格式是否符合规范？（年份+法院级别+类型+编号）
+□ 学者观点是否归属准确？（避免张冠李戴）
+□ 司法解释是否已被替代？
+□ 地方性法规是否仅适用于对应地域？
+
+# 标记系统
+- 🟢 确认（可找到明确法律依据）
+- 🟡 倾向（主流观点支持，存在少数异议）
+- 🔴 争议（学术/实务分歧大，须披露）
+- ⚪ 待核实（无法确认，提示用户通过 flk.npc.gov.cn 核实）
+
+# 输出处理
+对标记为⚪的内容必须：
+1. 不删除（保留参考价值）
+2. 明确标注不确定性
+3. 提供核实链接或方法
+```
+
+---
+
+#### Agent 7：律师审查节点（人机协作关键）
+
+**这是整个系统的核心差异点：AI生成 + 律师审查后用于法律决策**
+
+```markdown
+---
+name: human-attorney-review-gate
+description: 在关键输出节点暂停，格式化输出供持证律师审查
+---
+
+# 触发场景
+1. Phase 3 分析报告生成后（律师确认事实和分析）
+2. Phase 4 重要文书起草后（律师最终审查）
+3. 任何涉及🔴争议问题的结论
+4. 涉及刑事风险的分析输出
+
+# 审查输出格式
+╔══════════════════════════════════════╗
+║   ⚖️ 律师审查请求                      ║
+╚══════════════════════════════════════╝
+
+本次AI分析报告已生成，提请律师审查：
+
+【待确认事项】
+□ 事实梳理是否完整准确？
+□ 法律关系定性是否恰当？
+□ 引用法条是否为现行有效版本？
+□ 争议焦点是否完整覆盖？
+□ ⚪标注项是否已独立核实？
+
+【高风险标记事项】
+[列出所有🔴项和⚪项]
+
+【律师确认操作】
+✅ 批准发送至客户 / ✏️ 需要修改 / ❌ 需重新分析
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+### 3.3 Playbook 三层系统设计【v2 升级】
+
+> ⚡ **v2 更新**：从两层改为三层，增加「领域专属层」，避免公司法案件和劳动争议用同一套通用原则
+
+#### 第一层：律所通用（`legal.base.md`）
+
+```markdown
+# 律所通用法律立场
+
+## 一般合同原则
+- 管辖：优先选择我方住所地；涉外优先约定中国法院/中国仲裁
+- 争议解决：仲裁优先（北仲/贸仲），保护商业秘密
+- 违约金：主张实际损失+可预见损失，保留调整空间
+
+## 强制审查红线（自动标🔴）
+- 限制我方诉权/单方修改权/不对称免责/无限制赔偿责任
+
+## 诉讼费预估规则
+- 财产类：按标的额阶梯（《诉讼费用交纳办法》2007年）
+- 非财产类：各地固定费率，提示核实当地标准
+```
+
+#### 第二层：领域专属（`legal.{domain}.md`）【新增】
+
+```markdown
+# legal.company.md — 公司法领域专属
+
+## 高频争议预警（自动附加背景说明）
+- 认缴出资加速到期 → 引用新《公司法》第54条 + 《九民纪要》第6条
+  ⚠️ 新旧法时间适用问题必须披露
+- 法人格否认（横向/纵向）→ 必须区分，标注🔴
+- 对赌协议 → 区分与股东对赌/与公司对赌，可履行性分析
+
+## 股权架构分析框架
+- 多层穿透：穿透至实际控制人
+- 一致行动人识别：书面协议+实际表决行为
+```
+
+```markdown
+# legal.labor.md — 劳动法领域专属
+
+## 劳动关系认定框架
+- 参照劳社部发〔2005〕12号三要素
+- 新业态用工：⚠️标注🔴，各地差异大
+
+## 竞业限制审查清单
+- 补偿金标准：月工资x%（各地不同，提示核实）
+- 限制范围合理性：地域/行业/时间
+- 保密义务与竞业限制区分
+```
+
+```markdown
+# legal.criminal.md — 刑事领域专属
+
+## 辩护策略框架
+- 事实辩护：证据三性（客观性/关联性/合法性）质疑
+- 程序辩护：非法证据排除规则
+- 实体辩护：犯罪构成要件缺失
+- 量刑辩护：从轻/减轻/免除情节
+
+## 取保候审可行性评估
+- 法定条件：《刑事诉讼法》第67条
+- 实践中重点看：罪行轻重+社会危险性+认罪态度
+```
+
+#### 第三层：案件专属（`case.local.md`）
+
+```markdown
+# [客户名-案件编号] 专属配置
+
+## 诉讼时效状态（自动由时效Agent填写）
+- 最紧急截止：[日期] - 剩余[X]天
+- 上诉期：[日期]
+
+## 本案谈判底线
+- 最低可接受赔偿：...
+- 不可接受方案：...
+
+## 对方画像（从案件记忆库注入）
+- 历史纠纷：[与我们的过往案件记录]
+- 失信记录：[执行信息公开网查询结果]
+- 裁判倾向：[受诉法院已知特点]
+```
+
+---
+
+### 3.4 MCP 工具链集成【v2 更新】
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {"formats": ["pdf","docx","jpg","png"], "ocr": true},
+    "law-database": {"sources": ["北大法宝","威科先行","国家法律法规数据库"]},
+    "case-retrieval": {"source": "中国裁判文书网", "search_type": "semantic+keyword"},
+    "court-calendar": {"source": "中国审判流程信息公开网", "watch": ["开庭日期","送达记录"]},
+    "enforcement-check": {"source": "中国执行信息公开网", "watch": ["失信被执行人","限制消费令"]},
+    "document-store": {"versioning": true, "diff_tracking": true},
+    "notification": {"channels": ["企业微信","钉钉","邮件"], "triggers": ["时效预警","律师审查请求","法律更新"]},
+    "law-update-monitor": {"watch": "国家法律法规数据库变更", "alert_on_change": true}
+  }
+}
+```
+
+---
+
+### 3.5 专项 Skill 完整清单【v2 更新】
+
+| Skill | 功能 | 优先级 | 所用模型 |
+|-------|------|------|--------|
+| `cn-nda-review` | 中国法下保密协议快速分诊 | 🔴 高 | 小模型 |
+| `cn-litigation-strategy` | 管辖选择+争议解决路径 | 🔴 高 | 大模型 |
+| `cn-evidence-analysis` | 证据清单+证明力评估+取证指引 | 🔴 高 | 大模型 |
+| `cn-criminal-defense` | 刑事辩护方向+量刑分析+取保可行性 | 🔴 高 | 大模型 |
+| `cn-statute-of-limitations` | 时效自动计算+期限预警 | 🔴 高 | 小模型 |
+| `cn-contract-comparison` | 两版本合同 diff 对比分析 | 🔴 高 | 大模型 |
+| `cn-dispute-resolution-path` | 诉讼/仲裁/调解/行政投诉路径选择 | 🟡 中 | 大模型 |
+| `cn-damages-calculation` | 损失计算（利息/违约金/诉讼费） | 🟡 中 | 小模型 |
+| `cn-enforcement-strategy` | 执行方案（追加/恢复/财产调查） | 🟡 中 | 大模型 |
+| `cn-pre-hearing-briefing` | 开庭前摘要简报 | 🟡 中 | 小模型 |
+| `cn-compliance-monitor` | 法规变更监控+合规差距分析 | 🟢 低 | 小模型 |
+
+---
+
+### 3.6 模型分级调用策略【新增】
+
+> ⚡ **核心节省**：将信息处理类任务改用小模型，预计节省 60-70% Token 成本
+
+```python
+# model_router.py
+MODEL_ROUTING = {
+    # 小模型任务（结构化/分类/计算，无需复杂推理）
+    "small": "gpt-4o-mini | qwen2.5-7b",
+    "tasks_small": [
+        "信息提取",        # 从文本中提取结构化字段
+        "信息缺口处理",     # 追问分类
+        "诉讼时效计算",     # 日期计算
+        "赔偿金额计算",     # 数字计算
+        "反幻觉校验",       # 规则匹配
+        "文书格式化输出",   # 格式套模板
+    ],
+    # 大模型任务（深度推理/法律分析/文书生成）
+    "large": "claude-3-5-sonnet | deepseek-r1-32b",
+    "tasks_large": [
+        "法律关系定性",
+        "请求权基础分析",
+        "诉讼策略制定",
+        "刑事辩护方向",
+        "合同条款审查",
+        "法律文书起草",
+    ]
+}
+```
+
+**Token 控制策略（长文件处理）：**
+
+```python
+# token_manager.py
+MAX_TOKENS_PER_CALL = 100_000  # Claude 3.5 上限
+
+def handle_long_contract(contract_text):
+    if token_count(contract_text) > MAX_TOKENS_PER_CALL * 0.7:
+        # 超长合同：分章节处理 + 摘要合并
+        chunks = split_by_section(contract_text)  # 按条款章节切分
+        results = [review_chunk(c) for c in chunks]
+        return merge_reviews(results)  # 汇总关键风险项
+    else:
+        # 正常长度：单次处理
+        return review_full(contract_text)
+```
+
+---
+
+### 3.7 案件记忆与跨案关联系统【新增】
+
+> ⚡ **核心价值**：积累律所知识资产，实现「同一对方出现过」「类似案件怎么赢的」的跨案学习
+
+```python
+# memory_schema.py
+
+# 案件库（主表）
+CASE_DB = {
+    "case_id": "uuid",
+    "client_id": "外键",
+    "opponent_ids": ["外键列表"],
+    "case_type": "民事|刑事|行政...",
+    "domain": "公司法|劳动法...",
+    "phase_states": {"phase": 1, "last_update": "时间戳"},
+    "outcome": "胜诉|败诉|调解|撤诉|进行中",
+    "key_arguments": ["成功策略标签"],
+    "attorney_edits": ["律师改稿diff历史"],  # 反哺训练数据
+}
+
+# 对方当事人档案
+OPPONENT_PROFILE = {
+    "opponent_id": "uuid",
+    "name": "名称",
+    "past_cases": ["历史纠纷列表"],
+    "enforcement_records": ["失信/限消记录"],
+    "litigation_style": "激进拖延型|快速和解型...",  # 从历史案件学习
+    "winning_args_against": ["对其有效的论点"],
+}
+
+# 类案经验库
+CASE_TEMPLATE_DB = {
+    "template_id": "uuid",
+    "case_type": "...",
+    "fact_pattern": "...（案件事实模式描述）",
+    "winning_strategy": "...",
+    "key_evidence": ["关键证据类型"],
+    "cited_cases": ["案号列表"],
+    "outcome": "胜诉/调解",
+}
+```
+
+**上下文注入机制：**
+当新案件开始时，自动检索关联记忆注入 Orchestrator：
+
+```python
+def inject_memory_context(new_case):
+    context = []
+    # 1. 查询同一对方的历史案件
+    past = query_opponent_history(new_case.opponent)
+    if past: context.append(f"⚠️ 该对方曾有{len(past)}次纠纷记录")
+    # 2. 检索类似事实模式
+    similar = semantic_search(case_template_db, new_case.facts)
+    if similar: context.append(f"📂 发现{len(similar)}个类似案件，成功率{similar.win_rate}")
+    # 3. 注入时效状态
+    context.append(statue_of_limitations_agent.check(new_case))
+    return "\n".join(context)
+```
+
+---
+
+### 3.8 律师审查节点 diff 追踪【v2 升级】
+
+> ⚡ **v2 更新**：审查不只是「批准/拒绝」，而是完整的版本追踪 + 反哺训练管道
+
+```
+AI 生成稿 (v1)
+    │
+    ▼
+律师审查界面
+    ├── 显示 AI 稿全文
+    ├── 高亮所有🔴/⚪标注项
+    └── 内联编辑（律师直接改）
+         │
+         ▼
+    律师改稿 (v2)
+         │
+         ├── 自动生成 diff（v1 vs v2）
+         ├── 律师添加改稿理由标注
+         │
+         ▼
+    存入训练数据库
+    {ai_output: v1, attorney_correction: v2, reason: "...", case_type: "..."}
+         │
+         ▼
+    定期微调/Few-shot 示例更新
+    （律所专属偏好持续积累）
+```
+
+**审查界面最小需求（Streamlit实现）：**
+- 左栏：AI生成稿（带颜色标注）
+- 右栏：律师编辑区
+- 底部：确认/修改/拒绝 + 改稿理由输入
+- 自动保存版本历史，支持回溯
+
+---
+
+### 3.9 输出 Schema 标准化【新增】
+
+> ⚡ **工程化关键**：各 Agent 输出结构必须统一，Orchestrator 才能正确汇聚
+
+```python
+# output_schemas.py
+from pydantic import BaseModel
+
+class LegalAnalysisOutput(BaseModel):
+    agent_name: str
+    confidence_level: str  # GREEN|YELLOW|RED|GRAY
+    legal_basis: list[str]  # ["《民法典》第X条", ...]
+    analysis: str
+    uncertain_items: list[str]  # 待律师核实项
+    recommendations: list[str]
+    requires_attorney_review: bool  # 触发审查门控
+
+class CaseInfoOutput(BaseModel):
+    parties: dict
+    timeline: list[dict]  # [{date, fact, evidence}]
+    evidence_list: list[dict]
+    claim_labels: list[str]
+    missing_info: list[dict]  # [{category, question, impact}]
+
+class StatuteOutput(BaseModel):
+    deadlines: list[dict]  # [{type, start_date, deadline, days_remaining, urgency}]
+    most_urgent: dict
+    alerts: list[str]
+```
+
+---
+
+### 3.10 龙律师提示词映射关系【v2 更新】
+
+```
+龙律师提示词 → 多 Agent 拆解
+│
+├── 角色设定 + 反幻觉机制     → Orchestrator System Prompt + @hallucination_check 装饰器
+├── Phase 1 Step 1.2         → 信息提取 Agent（小模型）
+├── Phase 1 Step 1.3         → 信息缺口处理 Agent（追问部分，小模型）
+├── Phase 1 Step 1.4         → 诉讼时效 Agent（自动触发）
+├── Phase 2 Step 2.3         → 信息缺口处理 Agent（情景假设部分）
+├── Phase 3 Step 3.1         → 并行：[法律研究 + 请求权基础 + 风险评估] 三 Agent
+├── Phase 3 Step 3.2         → 律师审查节点（门控 + diff追踪）
+├── Phase 4 文书类           → 路由到：诉讼文书/合同起草/执行文书 Agent
+├── Phase 4 策略类           → 路由到：诉讼策略/争议解决路径 Agent
+└── Phase 4 执行类           → 执行方案 Agent
+
+热点争议预警清单（公司法7项/合同法3项/执行3项/劳动法2项）
+    → 集成到 法律研究 Agent 的触发规则：
+      命中争议关键词 → 自动附加「争议背景说明」+ 标注🔴
+```
+
+**关键工程挑战（完整版）：**
+1. **状态持久化**：4阶段状态跨轮次保存（SQLite + session_id）
+2. **并行执行协调**：LangGraph `parallel_branch` 处理 Phase 3 三 Agent 同时运行
+3. **上下文长度控制**：超长合同分 chunk 处理，摘要后传递给下游 Agent
+4. **律师审查UI**：Streamlit 内联编辑 + diff 自动生成
+5. **反哺训练管道**：律师改稿数据的格式化存储和定期提取
+
+---
+
+## 四、实施路径【v2 更新】
+
+```
+Phase 1（1-2周）：单体 MVP + 时效基础
+├── 直接将龙律师提示词部署为单体 Agent
+├── 接入 Claude API / Deepseek-R1 API
+├── 实现基础文档解析（PyMuPDF + 扫描件OCR）
+├── 实现诉讼时效计算 Agent（规则引擎，不需LLM）
+└── Streamlit 律师审查界面 MVP（批准/修改/版本存档）
+
+Phase 2（2-4周）：Agent 拆分 + 记忆系统
+├── 拆分信息提取、信息缺口处理为独立 Agent（小模型）
+├── LangGraph StateGraph 实现4阶段状态机
+├── SQLite 案件记忆库搭建（案件/客户/对方档案）
+├── 接入国家法律法规数据库（MCP工具）
+├── diff 追踪模块（律师改稿 → 格式化存储）
+└── 企业微信/钉钉审查通知集成
+
+Phase 3（1-2月）：多 Agent 并行 + 知识库
+├── Phase 3 并行执行：法律研究/请求权/风险评估同时运行
+├── 构建本地法规向量库（Qwen2.5 Embedding + Qdrant）
+├── 三层 Playbook 管理系统（base/domain/case 文件）
+├── 合同 chunk 分段处理（超长合同 Token 控制）
+├── 刑事辩护、合同对比、争议路径专项 Agent 上线
+└── 类案经验库：语义检索类似案件+胜率统计
+
+Phase 4（2-3月）：生产化
+├── 案件优先级队列：按时效/开庭日期自动排序待办
+├── 法律更新订阅：国家法律法规数据库变更推送
+├── 反哺微调管道：律师改稿数据定期提取 → Few-shot 示例更新
+├── 对方画像库：自动关联失信记录+历史诉讼风格
+└── 多律师协作：案件权限管理 + 审查分工
+```
+
+---
+
+## 五、技术选型建议【v3 框架深度对比版】
+
+> 详细对比报告见 → [agent_framework_comparison.md](./agent_framework_comparison.md)
+
+### 5.1 Agent 框架选型：7框架对比速览
+
+| 框架 | 状态管理 | HITL | 并行 | MCP集成 | 本地化 | 法律场景综合 |
+|------|---------|------|------|--------|-------|------------|
+| **LangGraph** | ⭐9 | ⭐10 | ⭐9 | ⭐8 | ⭐9 | **🏆 8.7** |
+| AutoGen v0.4 | ⭐6 | ⭐8 | ⭐7 | ⭐9 | ⭐8 | 7.5 |
+| CrewAI | ⭐7 | ⭐7 | ⭐8 | ⭐7 | ⭐8 | 7.4 |
+| OpenAI AgentKit | ⭐5 | ⭐7 | ⭐7 | ⭐8 | ⭐7 | 7.0 |
+| Semantic Kernel | ⭐7 | ⭐7 | ⭐7 | ⭐8 | ⭐4 | 6.5（Azure依赖） |
+| Claude Skills+MCP | ⭐4 | ⭐5 | ⭐4 | ⭐10 | ⭐7 | 5.8（MVP期） |
+| Mastra (TS) | ⭐8 | ⭐7 | ⭐8 | ⭐8 | ⭐7 | ❌ 非Python |
+
+**淘汰原因快览：**
+- **OpenAI AgentKit**：状态管理太弱，4阶段有状态是核心需求
+- **Semantic Kernel**：高度依赖 Azure，国内访问受限
+- **CrewAI**：角色框架好用，但4阶段精细控制能力不足
+- **Claude Skills 单用**：无法可靠控制跨轮次状态，仅适合 MVP
+- **Mastra**：TypeScript 原生，非 Python 技术栈
+
+### 5.2 最终选型：三层混合架构
+
+```
+Layer 1: Skill 内容层（Anthropic Skills 规范）
+         SKILL.md 定义 → 内容与框架解耦，可移植
+              ↓ 热加载为 System Prompt
+Layer 2: 编排引擎层（LangGraph）
+         StateGraph + interrupt_before（HITL）
+         + Send() 并行 + SqliteSaver 持久化
+              ↓ 标准化工具调用
+Layer 3: 工具协议层（MCP）
+         法律数据库 / 裁判文书网 / 通知 / 文件系统
+         via langchain-mcp-adapters
+```
+
+**LangGraph 击中所有关键约束：**
+- `interrupt_before=["attorney_gate"]` → 律师审查精确暂停/恢复
+- `Send()` API → Phase 3 三个 Agent 动态并行
+- `SqliteSaver` → 4阶段状态跨轮次持久化，支持时光回溯调试
+- 节点级别独立配置模型 → 小模型/大模型分层无框架限制
+
+**为什么保留 Anthropic Skills 规范（而非只用框架）：**
+Skills 是**内容标准**而非技术束缚——SKILL.md 文件被 LangGraph Node 直接加载为 System Prompt，保持内容可移植性（未来换框架不影响 Skill 质量积累）
+
+### 5.3 组件级选型清单
+
+| 组件 | 选择 | 理由 |
+|------|------|------|
+| **编排框架** | **LangGraph 0.2+** | 唯一满足：状态机+HITL精控+并行+时光回溯 |
+| **Skill 规范** | **Anthropic SKILL.md** | 内容与框架解耦，质量积累可移植 |
+| **工具协议** | **MCP + langchain-mcp-adapters** | 三方标准（Anthropic+微软+OpenAI），未来兼容 |
+| **主力模型（大）** | **Claude 3.5 Sonnet** | 法律推理+200K上下文，分析层专用 |
+| **主力模型（小）** | **Qwen2.5-7B** | 信息提取/计算，节省60% Token 成本 |
+| **本地私有化** | **Deepseek-R1-32B（vLLM）** | 数据不出境，中文法律能力优秀 |
+| **Embedding** | **Qwen2.5-7B** | 中文语义向量最优 |
+| **向量库** | **Qdrant** | 本地部署，支持混合检索（关键词+语义）|
+| **文档解析** | **PyMuPDF + Surya OCR** | 处理扫描件、手写合同、法院印章 |
+| **律师审查UI** | **Streamlit** | 快速开发，内联编辑 + diff 展示 |
+| **状态存储** | **SQLite（案件记忆+工作流状态）** | 轻量无依赖，LangGraph 原生支持 |
+| **通知** | **企业微信 Webhook** | 时效预警+审查请求推送 |
+| **Schema 验证** | **Pydantic v2** | Agent 输出结构强校验，Orchestrator 安全汇聚 |
+| **版本控制** | **Git（文书版本）** | 法律文书完整变更历史，合规可审计 |
+| **可观测性（开发）** | **LangSmith** | 全链路追踪，调试 Agent 行为 |
+| **可观测性（生产）** | **SQLite 自建日志** | 数据安全，不依赖外部服务 |
+
+---
+
+## 六、第三轮补充设计【工程化与合规维度】
+
+### 6.1 法律 RAG 检索策略【新增】
+
+> ⚡ 知识库检索质量直接决定法律研究 Agent 的输出质量，"存什么"不如"怎么检"重要
+
+**法律文档专用分块策略（不能按字数切）：**
+
+```python
+# chunking_strategy.py
+def chunk_legal_document(doc_type: str, text: str) -> list[Chunk]:
+    if doc_type == "法律法规":
+        # 按条文切：《民法典》第188条 → 独立 chunk，保留条文号
+        return split_by_article(text, pattern=r"第[一二三四五六七八九十百]+条")
+    elif doc_type == "合同":
+        # 按条款切：第X条整体保留，标注条款性质（权利/义务/违约/争议）
+        return split_by_clause(text, annotate_type=True)
+    elif doc_type == "判决书":
+        # 按法律文书结构切：查明事实 / 本院认为 / 判决如下
+        return split_by_section(text, sections=["查明", "认为", "判决"])
+    elif doc_type == "司法解释":
+        # 按条文 + 附属场景切（有配套案例的条文合并）
+        return split_by_article_with_context(text)
+```
+
+**四阶段混合检索管道：**
+
+```python
+# retrieval_pipeline.py
+def legal_hybrid_search(query: str, domain: str) -> list[Result]:
+    # Stage 1: BM25 关键词召回（精确匹配法条号/案号）
+    bm25_results = bm25_search(query, top_k=20)
+
+    # Stage 2: 语义向量召回（相似案件事实/类似法律问题）
+    semantic_results = qdrant_search(query, collection=domain, top_k=20)
+
+    # Stage 3: RRF 融合排序（倒数排名融合）
+    merged = reciprocal_rank_fusion(bm25_results, semantic_results)
+
+    # Stage 4: 时效性过滤（废止法律黑名单 + 新旧替代关系）
+    filtered = filter_expired_laws(merged, obsolete_list=OBSOLETE_LAW_DB)
+
+    return filtered[:10]  # 返回 Top 10，注入 Legal Research Agent
+```
+
+---
+
+### 6.2 跨会话上下文注入策略【新增】
+
+> ⚡ 一个案件跨越数周数十次对话，每次新会话注入什么、怎么注入是可用性根基
+
+**推荐方案：结构化注入（Strategy C）**
+
+```python
+# context_injector.py
+
+# 策略对比
+# A. 全注入 ❌  → 超 200K token 上限，成本极高
+# B. 摘要注入 ⚠️ → 信息损失，可能遗漏关键细节
+# C. 结构化注入 ✅ → 仅注入持久化的结构化事实表（推荐）
+
+CONTEXT_INJECTION_TEMPLATE = """
+## 案件持久化状态（已确认事实，无需重新收集）
+- 案件编号：{case_id}
+- 案件类型：{case_type} | 领域：{domain}
+- 当事人：{parties}
+- 核心争议：{core_dispute}
+- 诉讼时效：{statute_status}（最紧急截止：{nearest_deadline}）
+- 当前阶段：Phase {current_phase}
+- 上次律师确认意见：{attorney_notes}
+- 未解决缺口：{pending_gaps}
+
+> 注意：以上为已确认事实，本次对话继续从 Phase {current_phase} 推进。
+"""
+
+def inject_case_context(case_id: str, new_user_message: str) -> str:
+    state = load_case_state(case_id)  # 从 SQLite 加载持久化状态
+    context = CONTEXT_INJECTION_TEMPLATE.format(**state)
+    return f"{context}\n\n## 本次新增信息\n{new_user_message}"
+```
+
+**每次会话结束时自动存档：**
+
+```python
+def save_session_snapshot(state: LegalState):
+    """Phase 结束或律师审查后触发，持久化关键事实"""
+    snapshot = {
+        "confirmed_facts": state["case_info"],
+        "current_phase": state["phase"],
+        "deadlines": state["deadlines"],
+        "attorney_notes": state["attorney_edits"],
+        "pending_gaps": [g for g in state["missing_info"] if not g["resolved"]],
+    }
+    db.upsert("case_snapshots", {"case_id": state["session_id"]}, snapshot)
+```
+
+---
+
+### 6.3 证据 OCR 分类管道【补充落地】
+
+> ⚡ 第一轮 review 已指出此问题，本节提供具体实现设计
+
+**证据类型分类管道：**
+
+```python
+# evidence_pipeline.py
+
+EVIDENCE_PROCESSORS = {
+    "扫描合同/协议": {
+        "ocr": SuryaOCR(enhance=True),
+        "extract": extract_contract_fields,   # 金额/日期/当事人/签名位置
+        "output": "ContractEvidence"
+    },
+    "微信/钉钉聊天截图": {
+        "ocr": SuryaOCR(layout="chat"),
+        "extract": extract_chat_timeline,     # 发送方/时间戳/关键内容
+        "output": "ChatEvidence"
+    },
+    "银行流水PDF": {
+        "ocr": PyMuPDF(table_mode=True),      # 表格提取优先
+        "extract": extract_transaction_summary,  # 金额汇总 / 关键时点
+        "output": "BankStatementEvidence"
+    },
+    "法院文书（加盖印章）": {
+        "ocr": SuryaOCR(seal_detection=True),
+        "extract": extract_court_doc_fields,  # 案号/当事人/判决内容
+        "output": "CourtDocEvidence"
+    },
+    "手写签名合同": {
+        "ocr": SuryaOCR(handwriting=True),
+        "human_verify": True,                 # 强制要求律师核实原件
+        "output": "HandwrittenEvidence"
+    },
+}
+
+class EvidenceCard(BaseModel):
+    """统一输出 Schema，注入案件信息表"""
+    doc_type: str
+    key_facts: list[str]       # 提取的关键事实
+    dates: list[date]          # 所有日期（注入时效计算Agent）
+    amounts: list[dict]        # [{amount, currency, context}]
+    parties: list[str]         # 提及主体
+    reliability: str           # HIGH/MEDIUM/LOW
+    needs_verification: bool   # 是否需要律师核实原件
+    ocr_confidence: float      # 0-1，低于0.7强制人工复核
+```
+
+---
+
+### 6.4 合规免责声明机制【新增】
+
+> ⚡ 防止 AI 分析被当作正式法律意见直接使用，是执业合规的必须项
+
+```python
+# disclaimer.py
+
+DISCLAIMER_LEVELS = {
+    "GREEN":  "本分析供持证律师参考，已经律师审查确认，可用于法律决策。",
+    "YELLOW": "⚠️ 本分析含不确定事项，须经持证律师审查后方可用于法律决策。",
+    "RED":    "🔴 本分析存在重大不确定性，请律师全面复核，不得直接引用。",
+    "GRAY":   "⚪ 本分析涉及争议法律问题，须结合最新司法实践审慎判断。",
+}
+
+def attach_disclaimer(output: LegalAnalysisOutput) -> str:
+    level = output.confidence_level
+    disclaimer = DISCLAIMER_LEVELS[level]
+    metadata = (
+        f"\n---\n"
+        f"**[AI 辅助生成]** {disclaimer}\n"
+        f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')} | "
+        f"模型版本：{MODEL_VERSION} | "
+        f"审查律师：{'待审查' if not output.attorney_approved else output.reviewer_name}\n"
+        f"⚠️ 本文件不构成正式法律意见，仅供执业律师参考使用。"
+    )
+    return output.analysis + metadata
+```
+
+**输出等级与免责文本自动关联规则：**
+
+| 输出等级 | 触发条件 | 免责级别 |
+|---------|---------|---------|
+| 🟢 GREEN | 法律明确 + 律师已审查 | 最轻，可引用 |
+| 🟡 YELLOW | 存在争议点 / 待补充事实 | 提示审查 |
+| 🔴 RED | 废止法律/事实不明/刑事风险 | 强制全面复核 |
+| ⚪ GRAY | 司法解释争议 / 地区差异 | 结合实践判断 |
+
+---
+
+### 6.5 API 降级与限流策略【新增】
+
+```python
+# fallback_strategy.py
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+MODEL_FALLBACK_CHAIN = [
+    ("claude-3-5-sonnet-20241022", "Claude API"),   # 首选
+    ("deepseek-r1-32b",           "本地 vLLM"),    # 降级1：API限流时
+    ("qwen2.5-7b",                "本地 vLLM"),    # 降级2：32B不可用时
+]
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+def call_with_fallback(prompt: str, task_type: str) -> str:
+    for model, label in MODEL_FALLBACK_CHAIN:
+        try:
+            result = call_model(model, prompt, timeout=30)
+            if task_type == "large" and model != MODEL_FALLBACK_CHAIN[0][0]:
+                # 降级时在输出中标注
+                result += f"\n⚠️ 注意：本次分析使用降级模型（{label}），建议条件恢复后重新分析。"
+            return result
+        except (TimeoutError, RateLimitError):
+            continue
+    # 全部失败：保存任务到队列，通知律师
+    enqueue_task(prompt, task_type)
+    notify_attorney("系统临时不可用，分析任务已排队，预计 15 分钟后重试。")
+    raise SystemUnavailableError
+```
+
+---
+
+### 6.6 多客户数据隔离【新增】
+
+```python
+# isolation.py
+
+# SQLite：所有表必须包含 client_id，查询强制过滤
+def get_case(case_id: str, client_id: str) -> dict:
+    # 禁止：SELECT * FROM cases WHERE case_id = ?
+    # 必须：SELECT * FROM cases WHERE case_id = ? AND client_id = ?
+    return db.query(
+        "SELECT * FROM cases WHERE case_id = ? AND client_id = ?",
+        (case_id, client_id)
+    )
+
+# Qdrant：每个客户使用独立 Collection
+def get_client_collection(client_id: str) -> str:
+    return f"legal_kb_{client_id}"  # 禁止跨 Collection 检索
+
+# 文件系统：严格目录隔离
+FILE_ROOT = Path("cases/{client_id}/{case_id}/")
+
+# LLM 调用：禁止在同一 prompt 混入不同客户信息
+def validate_prompt_isolation(prompt: str, client_id: str):
+    other_clients = db.query("SELECT client_id FROM clients WHERE client_id != ?", (client_id,))
+    for c in other_clients:
+        if c["name"] in prompt:  # 简单检查：其他客户名称不应出现
+            raise IsolationViolationError(f"Prompt 可能混入了其他客户信息")
+```
+
+---
+
+### 6.7 AI 输出质量评估体系【新增】
+
+```python
+# quality_metrics.py
+
+# 核心质量指标追踪（写入 SQLite quality_metrics 表）
+QUALITY_METRICS = {
+    "法律引用准确率": """
+        # 引用法条是否存在且当前有效
+        valid_citations / total_citations
+    """,
+    "律师修改率": """
+        # 律师改稿 diff 中修改行数占总行数的比例
+        attorney_edited_lines / total_lines
+    """,
+    "重大错误率": """
+        # 🔴 标注项中被律师否定的比例（标注了但实际没问题 = 误报）
+        red_flag_overturned / total_red_flags
+    """,
+    "阶段完成率": """
+        # 案件成功从 Phase 1 推进到 Phase 4 的比例（衡量工作流稳定性）
+        cases_reached_phase4 / total_cases
+    """,
+}
+
+def track_attorney_edit(case_id: str, v1: str, v2: str, reason: str):
+    """律师每次改稿后自动调用，写入质量数据"""
+    edit_rate = compute_edit_rate(v1, v2)
+    db.insert("quality_metrics", {
+        "case_id": case_id,
+        "metric": "attorney_edit_rate",
+        "value": edit_rate,
+        "reason_tags": extract_reason_tags(reason),  # 如："法律引用错误"/"措辞不当"等
+        "timestamp": datetime.now(),
+    })
+```
+
+---
+
+### 6.8 冷启动策略【新增】
+
+> ⚡ 新系统上线时类案经验库为空，需要 Bootstrap 策略保证"即开即用"
+
+```
+Bootstrap 三步走：
+
+Step 1（上线前，1周）：导入律师历史胜诉案件
+  └── 律师整理 10-20 个典型胜诉案件的结构化摘要
+  └── 录入 case_template_db（事实模式 + 成功策略 + 关键证据）
+  └── 目标：覆盖最常见的 5 种案件类型
+
+Step 2（上线后，并行运行）：接入公开裁判文书
+  └── 爬取中国裁判文书网同类型案件（按关键词过滤）
+  └── 向量化存入 Qdrant，作为冷启动语料
+  └── 标注置信度 LOW（公开案件不一定代表律所风格）
+
+Step 3（运行3个月后）：自动替换
+  └── 律所自有案件积累超过 50 个后，降低公开案件权重
+  └── 自有案件胜率明显高于公开案件基准时，完全切换
+  └── 定期清理：低质量案件（律师改稿率 > 50%）降权或移除
+```

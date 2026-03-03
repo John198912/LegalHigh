@@ -1,0 +1,165 @@
+# Phase 1 MVP 实施计划
+
+**目标：** 1-2周内跑通完整4阶段工作流，验证核心业务逻辑可行性
+
+---
+
+## 项目目录结构
+
+```
+d:\#WorkSpace\Antigravity\LegalHigh\
+├── data/                      # 现有设计文档（保持不变）
+├── skills/                    # 现有 Anthropic Skills 参考（保持不变）
+└── legal_agent/               # 新建：主项目目录
+    ├── pyproject.toml         # uv 项目配置
+    ├── .env.example           # API Key 配置模板
+    ├── skills/                # 龙律师 Skills（SKILL.md 格式）
+    │   ├── cn-case-information-extractor/
+    │   │   └── SKILL.md
+    │   ├── cn-information-gap-handler/
+    │   │   └── SKILL.md
+    │   ├── cn-legal-research/
+    │   │   └── SKILL.md
+    │   ├── cn-rights-basis-analysis/
+    │   │   └── SKILL.md
+    │   └── cn-legal-risk-assessment/
+    │       └── SKILL.md
+    ├── playbooks/             # Playbook 三层结构
+    │   ├── legal.base.md
+    │   ├── legal.company.md
+    │   ├── legal.labor.md
+    │   └── legal.criminal.md
+    ├── src/
+    │   └── legal_agent/
+    │       ├── __init__.py
+    │       ├── state.py        # LegalState TypedDict 定义
+    │       ├── workflow.py     # LangGraph StateGraph 主编排
+    │       ├── nodes/          # 各 Agent 节点
+    │       │   ├── __init__.py
+    │       │   ├── complexity_router.py
+    │       │   ├── phase1_extract.py
+    │       │   ├── statute_checker.py    # 纯规则引擎，不用LLM
+    │       │   ├── gap_handler.py
+    │       │   ├── legal_research.py
+    │       │   ├── rights_basis.py
+    │       │   ├── risk_assessment.py
+    │       │   └── attorney_gate.py     # HITL 审查节点
+    │       ├── skills_loader.py  # 加载 SKILL.md 为 System Prompt
+    │       ├── model_router.py   # 小/大模型分层调用
+    │       └── db.py            # SQLite 案件状态持久化
+    ├── ui/
+    │   └── app.py              # Streamlit 律师审查界面
+    ├── cases/                  # 案件文件（.gitignore 忽略）
+    └── tests/
+        ├── test_statute.py     # 时效计算单元测试
+        └── test_workflow.py    # 工作流集成测试（mock LLM）
+```
+
+---
+
+## Proposed Changes
+
+### Core — 状态定义与工作流骨架
+
+#### [NEW] [state.py](file:///d:/#WorkSpace/Antigravity/LegalHigh/legal_agent/src/legal_agent/state.py)
+
+`LegalState` TypedDict：包含 phase、case_info、deadlines、并行分析结果、律师审查状态等所有字段。是整个系统的数据契约。
+
+#### [NEW] [workflow.py](file:///d:/#WorkSpace/Antigravity/LegalHigh/legal_agent/src/legal_agent/workflow.py)
+
+LangGraph `StateGraph` 主图：
+- 节点：complexity_router → phase1_extract → statute_checker → gap_handler → [并行: legal_research + rights_basis + risk_assessment] → attorney_gate
+- `interrupt_before=["attorney_gate"]` 实现 HITL 暂停
+- `SqliteSaver` 持久化跨轮次状态
+
+---
+
+### Skills 层 — 龙律师提示词拆解
+
+#### [NEW] `skills/cn-case-information-extractor/SKILL.md`
+从龙律师提示词 Phase 1 Step 1.2 提取，结构化事实/证据/当事人
+
+#### [NEW] `skills/cn-information-gap-handler/SKILL.md`
+龙律师 Phase 1 Step 1.3 + Phase 2 Step 2.3 合并，ABCD追问 + 情景假设
+
+#### [NEW] `skills/cn-legal-research/SKILL.md`
+龙律师 Phase 3 法律研究部分，法条+司法解释+案例+时效性校验
+
+#### [NEW] `skills/cn-rights-basis-analysis/SKILL.md`
+请求权基础分析，构成要件逐一检验框架
+
+#### [NEW] `skills/cn-legal-risk-assessment/SKILL.md`
+风险评估，置信度矩阵 🟢🟡🔴⚪
+
+---
+
+### 规则引擎 — 诉讼时效计算
+
+#### [NEW] [statute_checker.py](file:///d:/#WorkSpace/Antigravity/LegalHigh/legal_agent/src/legal_agent/nodes/statute_checker.py)
+
+纯 Python 规则引擎（不调用 LLM），包含：
+- 一般时效（3年）、特殊时效规则表
+- 节假日顺延（`chinese_calendar` 库）
+- 工作日/自然日二元计算
+- 输出标准 `StatuteOutput` Pydantic 模型
+
+---
+
+### UI — 律师审查界面 MVP
+
+#### [NEW] [ui/app.py](file:///d:/#WorkSpace/Antigravity/LegalHigh/legal_agent/ui/app.py)
+
+Streamlit 界面：
+- 左侧：案件输入 + 阶段状态显示
+- 中间：AI 生成稿（带颜色标注）
+- 右侧：律师编辑区 + 改稿理由
+- 底部：批准 / 修改 / 拒绝 按钮
+- 自动生成 diff 并存档
+
+---
+
+## 依赖清单
+
+```toml
+# pyproject.toml 核心依赖
+[dependencies]
+langgraph = ">=0.2"
+anthropic = ">=0.40"
+streamlit = ">=1.35"
+pydantic = ">=2.0"
+chinese-calendar = ">=1.9"     # 节假日计算
+python-dotenv = ">=1.0"
+```
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+**时效计算单元测试（无需 LLM，纯逻辑）：**
+```bash
+cd d:\#WorkSpace\Antigravity\LegalHigh\legal_agent
+uv run pytest tests/test_statute.py -v
+# 测试用例：3年一般时效/节假日顺延/时效中断/程序期限
+```
+
+**工作流集成测试（mock LLM 响应）：**
+```bash
+uv run pytest tests/test_workflow.py -v
+# mock Claude API，验证4阶段状态转换和 HITL 暂停逻辑
+```
+
+### Manual Verification
+
+**验证完整工作流：**
+1. `cd legal_agent && uv run streamlit run ui/app.py`
+2. 浏览器打开 `http://localhost:8501`
+3. 粘贴一个简单的借款纠纷案件描述（例：甲向乙借款10万，2021年1月到期未还）
+4. 点击"开始分析"，验证 Phase 1 信息提取结果是否结构化
+5. 系统到律师审查节点自动暂停，验证界面显示 AI 草稿
+6. 律师点击"批准"，验证流程继续到 Phase 4
+
+> [!NOTE]
+> Phase 1 MVP 中 Phase 3 三个 Agent 串行运行（简化），并行执行在 Phase 2 实现
+
