@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LegalHigh | Premium MD Editor</title>
+    <link rel="stylesheet" href="./style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo">LEGALHIGH EDITOR</div>
+            <div class="toolbar">
+                <button id="save-btn" style="background: var(--accent-gold); border: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; cursor: pointer;">SAVE DOCUMENT</button>
+            </div>
+        </header>
+        <main class="main-editor">
+            <section class="editor-pane">
+                <textarea id="markdown-input" placeholder="Start drafting your legal analysis..."></textarea>
+            </section>
+            <section class="preview-pane" id="preview-output">
+            </section>
+        </main>
+    </div>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
